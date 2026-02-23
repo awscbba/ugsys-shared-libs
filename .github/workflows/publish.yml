@@ -1,0 +1,169 @@
+name: Publish to GitHub Packages
+
+# Triggered by tags like: auth-client/v0.2.0  logging-lib/v1.0.0
+on:
+  push:
+    tags:
+      - "auth-client/v*"
+      - "logging-lib/v*"
+      - "event-lib/v*"
+      - "testing-lib/v*"
+
+env:
+  PYTHON_VERSION: "3.13"
+  REGISTRY: "https://ghcr.io"
+
+jobs:
+  # ============================================================
+  # Resolve which package this tag targets
+  # ============================================================
+  resolve:
+    name: Resolve Package
+    runs-on: ubuntu-latest
+    outputs:
+      package: ${{ steps.parse.outputs.package }}
+      version: ${{ steps.parse.outputs.version }}
+    steps:
+      - name: Parse tag
+        id: parse
+        run: |
+          TAG="${{ github.ref_name }}"          # e.g. auth-client/v0.1.0
+          PKG="${TAG%%/v*}"                      # auth-client
+          VER="${TAG#*/v}"                       # 0.1.0
+          echo "package=$PKG" >> $GITHUB_OUTPUT
+          echo "version=$VER"  >> $GITHUB_OUTPUT
+          echo "Publishing $PKG @ $VER"
+
+  # ============================================================
+  # Full CI gate before publish (lint + test)
+  # ============================================================
+  ci-gate:
+    name: CI Gate (${{ needs.resolve.outputs.package }})
+    runs-on: ubuntu-latest
+    needs: [resolve]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Lint
+        run: uv run --directory ${{ needs.resolve.outputs.package }} --extra dev ruff check src/
+
+      - name: Format check
+        run: uv run --directory ${{ needs.resolve.outputs.package }} --extra dev ruff format --check src/
+
+      - name: Tests
+        run: uv run --directory ${{ needs.resolve.outputs.package }} --extra dev pytest tests/ -v --tb=short
+
+  # ============================================================
+  # Build wheel + sdist
+  # ============================================================
+  build:
+    name: Build (${{ needs.resolve.outputs.package }})
+    runs-on: ubuntu-latest
+    needs: [resolve, ci-gate]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install hatch
+        run: uv tool install hatch
+
+      - name: Build wheel + sdist
+        working-directory: ${{ needs.resolve.outputs.package }}
+        run: uv tool run hatch build
+
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ needs.resolve.outputs.package }}
+          path: ${{ needs.resolve.outputs.package }}/dist/
+          retention-days: 7
+
+  # ============================================================
+  # Publish to GitHub Packages (GHCR PyPI-compatible index)
+  # ============================================================
+  publish:
+    name: Publish (${{ needs.resolve.outputs.package }})
+    runs-on: ubuntu-latest
+    needs: [resolve, build]
+    permissions:
+      packages: write   # required to push to GHCR
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Download dist artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-${{ needs.resolve.outputs.package }}
+          path: dist/
+
+      - name: Publish to GitHub Packages
+        run: |
+          uv tool install twine
+          uv tool run twine upload \
+            --repository-url https://ghcr.io/awscbba/ \
+            --username ${{ github.actor }} \
+            --password ${{ secrets.GITHUB_TOKEN }} \
+            dist/*
+
+  # ============================================================
+  # Create GitHub Release with changelog
+  # ============================================================
+  release:
+    name: GitHub Release
+    runs-on: ubuntu-latest
+    needs: [resolve, publish]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download dist artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-${{ needs.resolve.outputs.package }}
+          path: dist/
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          PKG="${{ needs.resolve.outputs.package }}"
+          VER="${{ needs.resolve.outputs.version }}"
+          PREV_TAG=$(git tag --list "${PKG}/v*" --sort=-version:refname | sed -n '2p')
+          if [ -n "$PREV_TAG" ]; then
+            NOTES=$(git log "${PREV_TAG}..HEAD" --pretty=format:"- %s" -- "${PKG}/" | head -30)
+          else
+            NOTES="Initial release of ${PKG} v${VER}"
+          fi
+          echo "notes<<EOF" >> $GITHUB_OUTPUT
+          echo "$NOTES"     >> $GITHUB_OUTPUT
+          echo "EOF"        >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "${{ needs.resolve.outputs.package }} v${{ needs.resolve.outputs.version }}"
+          body: ${{ steps.notes.outputs.notes }}
+          files: dist/*
+          draft: false
+          prerelease: ${{ contains(needs.resolve.outputs.version, 'rc') || contains(needs.resolve.outputs.version, 'alpha') || contains(needs.resolve.outputs.version, 'beta') }}
