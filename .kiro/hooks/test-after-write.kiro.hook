@@ -1,0 +1,17 @@
+{
+  "enabled": true,
+  "name": "TDD — Run Tests After Code Changes",
+  "description": "Enforces TDD workflow for shared-libs monorepo: after editing Python source or test files in any sub-package, run that sub-package's tests immediately.",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "**/src/**/*.py",
+      "**/tests/**/*.py"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "You just edited a Python file in the shared-libs monorepo. Follow the TDD workflow:\n\n1. Identify which sub-package was changed (auth-client, event-lib, logging-lib, or testing-lib) from the file path.\n\n2. If you wrote a TEST file: run it with `uv run pytest <test_file>::<test_name> -v` using cwd set to the sub-package directory (e.g., `ugsys-shared-libs/auth-client`) — it should FAIL (RED).\n\n3. If you wrote a SOURCE file: run the corresponding test with `uv run pytest tests/ -v --tb=short` using cwd set to the sub-package directory — it should now PASS (GREEN).\n\n4. NEVER skip running tests. NEVER write more implementation without a failing test first.\n\nAlways use cwd pointing to the specific sub-package directory, NOT the shared-libs root."
+  }
+}
