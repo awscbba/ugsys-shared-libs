@@ -1,26 +1,11 @@
 #!/usr/bin/env bash
-# pre-commit hook — runs on every commit
-# Enforces: lint, format check, no direct commits to main/develop
 set -euo pipefail
-
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
-
-echo ""
-echo "🔍 Running pre-commit checks..."
-echo ""
-
-# ── 1. Branch guard: never commit directly to main ──────────────────────────
+RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[1;33m' NC='\033[0m'
+echo "" && echo "🔍 Running pre-commit checks..." && echo ""
 BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
 if [[ "$BRANCH" == "main" ]]; then
-  echo -e "${RED}✗ Direct commits to 'main' are not allowed.${NC}"
-  echo "  Create a feature branch: git checkout -b feature/your-feature"
-  exit 1
+  echo -e "${RED}✗ Direct commits to 'main' are not allowed.${NC}"; exit 1
 fi
-
-# ── 2. Detect which packages have staged changes ────────────────────────────
 STAGED=$(git diff --cached --name-only)
 PACKAGES=()
 for pkg in auth-client logging-lib event-lib testing-lib; do
@@ -28,46 +13,34 @@ for pkg in auth-client logging-lib event-lib testing-lib; do
     PACKAGES+=("$pkg")
   fi
 done
-
 if [ ${#PACKAGES[@]} -eq 0 ]; then
-  echo -e "${GREEN}✓ No package source changes staged — skipping lint/format.${NC}"
-  echo ""
-  exit 0
+  echo -e "${GREEN}✓ No package source changes staged — skipping checks.${NC}"
+  echo ""; exit 0
 fi
-
 echo "  Packages with staged changes: ${PACKAGES[*]}"
 echo ""
-
 FAILED=0
-
 for pkg in "${PACKAGES[@]}"; do
   echo -e "${YELLOW}── $pkg ──${NC}"
-
-  # Ruff lint (use uv tool run — no venv needed)
   if uv tool run ruff check "$pkg/src/" --quiet 2>&1; then
     echo -e "  ${GREEN}✓ ruff lint${NC}"
   else
-    echo -e "  ${RED}✗ ruff lint failed — run: just lint${NC}"
-    FAILED=1
+    echo -e "  ${RED}✗ ruff lint failed — run: just lint${NC}"; FAILED=1
   fi
-
-  # Ruff format check
   if uv tool run ruff format --check "$pkg/src/" --quiet 2>&1; then
     echo -e "  ${GREEN}✓ ruff format${NC}"
   else
-    echo -e "  ${RED}✗ ruff format failed — run: just format${NC}"
-    FAILED=1
+    echo -e "  ${RED}✗ ruff format failed — run: just format${NC}"; FAILED=1
   fi
-
+  if just test-pkg "$pkg" 2>&1; then
+    echo -e "  ${GREEN}✓ unit tests${NC}"
+  else
+    echo -e "  ${RED}✗ unit tests failed — run: just test-pkg $pkg${NC}"; FAILED=1
+  fi
   echo ""
 done
-
 if [ $FAILED -ne 0 ]; then
-  echo -e "${RED}✗ Pre-commit checks failed. Fix the issues above before committing.${NC}"
-  echo ""
-  exit 1
+  echo -e "${RED}✗ Pre-commit checks failed.${NC}"; exit 1
 fi
-
 echo -e "${GREEN}✓ All pre-commit checks passed.${NC}"
-echo ""
-exit 0
+echo ""; exit 0
