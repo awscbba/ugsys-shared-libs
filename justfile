@@ -19,21 +19,24 @@ branch name:
 lint:
     @for pkg in auth-client logging-lib event-lib testing-lib; do \
         echo "=== Linting $$pkg ==="; \
-        uv run --directory $$pkg --extra dev ruff check src/; \
+        src=$$(find $$pkg -maxdepth 1 -mindepth 1 -type d ! -name '.*' ! -name 'tests' ! -name '__pycache__' ! -name '.venv' ! -name '.pytest_cache' ! -name '.ruff_cache' | head -1); \
+        uv run --directory $$pkg --extra dev ruff check $$src/; \
     done
 
 # Format all packages
 format:
     @for pkg in auth-client logging-lib event-lib testing-lib; do \
         echo "=== Formatting $$pkg ==="; \
-        uv run --directory $$pkg --extra dev ruff format src/; \
+        src=$$(find $$pkg -maxdepth 1 -mindepth 1 -type d ! -name '.*' ! -name 'tests' ! -name '__pycache__' ! -name '.venv' ! -name '.pytest_cache' ! -name '.ruff_cache' | head -1); \
+        uv run --directory $$pkg --extra dev ruff format $$src/; \
     done
 
 # Check formatting without modifying
 format-check:
     @for pkg in auth-client logging-lib event-lib testing-lib; do \
         echo "=== Format check $$pkg ==="; \
-        uv run --directory $$pkg --extra dev ruff format --check src/; \
+        src=$$(find $$pkg -maxdepth 1 -mindepth 1 -type d ! -name '.*' ! -name 'tests' ! -name '__pycache__' ! -name '.venv' ! -name '.pytest_cache' ! -name '.ruff_cache' | head -1); \
+        uv run --directory $$pkg --extra dev ruff format --check $$src/; \
     done
 
 # Run tests for all packages
@@ -58,7 +61,8 @@ sync:
 security-scan:
     @echo "=== Bandit SAST ==="
     @for pkg in auth-client logging-lib event-lib testing-lib; do \
-        uv tool run bandit -r $$pkg/src/ -ll -ii || true; \
+        src=$$(find $$pkg -maxdepth 1 -mindepth 1 -type d ! -name '.*' ! -name 'tests' ! -name '__pycache__' ! -name '.venv' ! -name '.pytest_cache' ! -name '.ruff_cache' | head -1); \
+        uv tool run bandit -r $$src/ -ll -ii || true; \
     done
     @echo "=== pip-audit ==="
     @for pkg in auth-client logging-lib event-lib testing-lib; do \
