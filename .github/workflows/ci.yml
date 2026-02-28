@@ -78,13 +78,14 @@ jobs:
         id: srcdir
         run: |
           PKG="${{ matrix.package }}"
+          # Find the source dir name relative to the package root
           if [ -d "$PKG/src" ]; then
-            echo "dir=$PKG/src" >> $GITHUB_OUTPUT
+            echo "dir=src" >> $GITHUB_OUTPUT
           else
             DIR=$(find "$PKG" -maxdepth 1 -mindepth 1 -type d \
               ! -name '.*' ! -name 'tests' ! -name '__pycache__' \
               ! -name '.venv' ! -name '.pytest_cache' ! -name '.ruff_cache' \
-              | head -1)
+              | head -1 | xargs basename)
             echo "dir=$DIR" >> $GITHUB_OUTPUT
           fi
 
