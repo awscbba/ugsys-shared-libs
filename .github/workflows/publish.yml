@@ -43,14 +43,13 @@ jobs:
         id: srcdir
         run: |
           PKG="${{ needs.resolve.outputs.package }}"
-          # Use src/ if it exists, otherwise find the package directory
           if [ -d "$PKG/src" ]; then
-            echo "dir=$PKG/src" >> $GITHUB_OUTPUT
+            echo "dir=src" >> $GITHUB_OUTPUT
           else
             DIR=$(find "$PKG" -maxdepth 1 -mindepth 1 -type d \
               ! -name '.*' ! -name 'tests' ! -name '__pycache__' \
               ! -name '.venv' ! -name '.pytest_cache' ! -name '.ruff_cache' \
-              | head -1)
+              | head -1 | xargs basename)
             echo "dir=$DIR" >> $GITHUB_OUTPUT
           fi
       - run: uv run --directory ${{ needs.resolve.outputs.package }} --extra dev ruff check ${{ steps.srcdir.outputs.dir }}/
