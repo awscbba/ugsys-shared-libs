@@ -74,11 +74,25 @@ jobs:
       - name: Sync deps
         run: uv sync --directory ${{ matrix.package }} --extra dev
 
+      - name: Resolve source directory
+        id: srcdir
+        run: |
+          PKG="${{ matrix.package }}"
+          if [ -d "$PKG/src" ]; then
+            echo "dir=$PKG/src" >> $GITHUB_OUTPUT
+          else
+            DIR=$(find "$PKG" -maxdepth 1 -mindepth 1 -type d \
+              ! -name '.*' ! -name 'tests' ! -name '__pycache__' \
+              ! -name '.venv' ! -name '.pytest_cache' ! -name '.ruff_cache' \
+              | head -1)
+            echo "dir=$DIR" >> $GITHUB_OUTPUT
+          fi
+
       - name: Ruff lint
-        run: uv run --directory ${{ matrix.package }} --extra dev ruff check src/
+        run: uv run --directory ${{ matrix.package }} --extra dev ruff check ${{ steps.srcdir.outputs.dir }}/
 
       - name: Ruff format check
-        run: uv run --directory ${{ matrix.package }} --extra dev ruff format --check src/
+        run: uv run --directory ${{ matrix.package }} --extra dev ruff format --check ${{ steps.srcdir.outputs.dir }}/
 
       - name: Run tests
         run: uv run --directory ${{ matrix.package }} --extra dev pytest tests/ -v --tb=short
@@ -108,7 +122,15 @@ jobs:
           uv tool install bandit
           for pkg in auth-client logging-lib event-lib testing-lib; do
             echo "=== $pkg ==="
-            uv tool run bandit -r $pkg/src/ -ll -ii || true
+            if [ -d "$pkg/src" ]; then
+              src="$pkg/src"
+            else
+              src=$(find "$pkg" -maxdepth 1 -mindepth 1 -type d \
+                ! -name '.*' ! -name 'tests' ! -name '__pycache__' \
+                ! -name '.venv' ! -name '.pytest_cache' ! -name '.ruff_cache' \
+                | head -1)
+            fi
+            uv tool run bandit -r "$src/" -ll -ii || true
           done
 
       - name: pip-audit SCA
