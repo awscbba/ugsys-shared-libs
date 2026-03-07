@@ -217,6 +217,7 @@ configure_logging(settings.service_name, settings.log_level)
 logger = structlog.get_logger()
 
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("startup.begin", service=settings.service_name, version=settings.version)
@@ -353,6 +354,7 @@ async def test_register_user_raises_conflict_when_email_exists() -> None:
 - Test the domain exception type, not the HTTP status code (that's the handler's job)
 - Test `user_message` does NOT contain internal details or PII
 - One `pytest.raises` per test — don't test multiple failure modes in one test
+
 
 ---
 
@@ -507,6 +509,7 @@ async def test_register_user_saves_and_returns_user() -> None:
 | Refactoring | `uv run pytest tests/unit/ -v` (all must stay GREEN) |
 | Before commit | `uv run pytest tests/unit/ -v --tb=short` (full suite) |
 
+
 ---
 
 ## 10. Outbox Pattern (reliable event delivery)
@@ -608,6 +611,7 @@ class OutboxProcessor:
 - Events with `retry_count >= 5` → set status to `failed`, alert via CloudWatch alarm
 - Outbox processor is idempotent — re-publishing the same event is safe (consumers must be idempotent too)
 - Never bypass the outbox by publishing directly when the outbox pattern is in use for that aggregate
+
 
 ---
 
@@ -728,6 +732,7 @@ class DynamoDBSubscriptionRepository(SubscriptionRepository):
 - DynamoDB transactions have a 100-operation limit — if you need more, redesign the aggregate boundaries
 - All items in a transaction must be in the same AWS region (DynamoDB limitation)
 - Unit of Work + Outbox Pattern combine naturally: the outbox write is just another operation in the transaction
+
 
 ---
 
@@ -886,6 +891,7 @@ class IdentityManagerClient(IdentityClient):
 - Never use circuit breaker for DynamoDB calls — those are handled by repository error wrapping
 - Services that use circuit breaker: `IdentityManagerClient`, `EventBridgePublisher` (when not using outbox)
 
+
 ---
 
 ## 13. Specification / Query Object (composable filters)
@@ -936,6 +942,7 @@ class ProjectListQuery:
             self.date_from, self.date_to, self.search_term, self.tags,
         ])
 ```
+
 
 ### Repository port uses the query object
 
@@ -1013,6 +1020,7 @@ class DynamoDBProjectRepository(ProjectRepository):
             values[":date_to"] = {"S": query.date_to}
         return parts, values
 ```
+
 
 ### Presentation layer — query params to query object
 

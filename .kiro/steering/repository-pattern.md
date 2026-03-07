@@ -50,6 +50,7 @@ Rules:
 - Return types use domain entities only — never DynamoDB dicts or boto3 types
 - `list_*` methods return `tuple[list[Entity], int]` where `int` is total count for pagination
 
+
 ---
 
 ## 2. External Service Ports (Domain Layer)
@@ -76,6 +77,7 @@ class IdentityClient(ABC):
     async def create_user(self, email: str, full_name: str, password: str) -> str: ...
     # returns user_id
 ```
+
 
 ---
 
@@ -211,6 +213,7 @@ class DynamoDBUserRepository(UserRepository):
         )
 ```
 
+
 ### 3.2 Serialization Rules
 
 - `_to_item(entity) -> dict` — domain entity → DynamoDB AttributeValue dict
@@ -244,6 +247,7 @@ Special `ClientError` codes to handle explicitly:
 - `ConditionalCheckFailedException` on `save` → raise `RepositoryError` (duplicate)
 - `ConditionalCheckFailedException` on `update` → raise `NotFoundError`
 - All others → `_raise_repository_error()`
+
 
 ---
 
@@ -279,6 +283,7 @@ def get_user_service() -> UserService:
     return app.state.user_service
 ```
 
+
 ---
 
 ## 5. Unit Testing — Mock at the Port Boundary
@@ -305,6 +310,7 @@ async def test_register_raises_conflict_when_email_exists() -> None:
     assert exc_info.value.error_code == "EMAIL_ALREADY_EXISTS"
     assert "test@example.com" not in exc_info.value.user_message
 ```
+
 
 ---
 
@@ -355,6 +361,7 @@ Integration test rules:
 - Test `_to_item` / `_from_item` round-trips for all entity fields
 - Test backward compatibility: items missing new optional fields deserialize with safe defaults
 - Test `ClientError` wrapping: verify `RepositoryError` is raised (not raw `ClientError`)
+
 
 ---
 
