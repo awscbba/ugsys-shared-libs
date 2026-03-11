@@ -33,11 +33,16 @@ class TokenValidator:
     """Validates JWT tokens for ugsys services.
 
     Supports two modes:
-    - RS256 + JWKS (production): pass ``jwks_url`` pointing to Cognito JWKS endpoint.
+    - RS256 + JWKS (production): pass ``jwks_url`` pointing to identity-manager JWKS endpoint.
     - HS256 local secret (legacy/test only): pass ``jwt_secret`` + ``jwt_algorithm="HS256"``.
 
     Algorithm restriction is enforced in BOTH modes: tokens signed with HS256, HS384,
     HS512, or 'none' are rejected immediately when the validator is in RS256 mode.
+
+    Audience validation: if ``audience`` is provided, PyJWT enforces the ``aud`` claim.
+    Tokens issued by ugsys-identity-manager include ``aud: "admin-panel"`` — consuming
+    services MUST pass ``audience="admin-panel"`` (or the correct value) to validate them.
+    Without this, PyJWT raises ``InvalidAudienceError`` and validation silently returns None.
     """
 
     def __init__(
@@ -46,18 +51,23 @@ class TokenValidator:
         jwt_algorithm: str = "RS256",
         jwks_url: str | None = None,
         identity_url: str | None = None,
+        audience: str | None = None,
     ) -> None:
         """
         Args:
             jwt_secret: Shared secret for HS256 local validation (test/legacy only).
             jwt_algorithm: JWT signing algorithm. Must be 'RS256' for production.
-            jwks_url: Cognito JWKS endpoint URL for RS256 public key fetching.
+            jwks_url: Identity-manager JWKS endpoint URL for RS256 public key fetching.
             identity_url: Identity Manager base URL for remote validation fallback.
+            audience: Expected ``aud`` claim value. Required when tokens include an ``aud``
+                claim (all access tokens from ugsys-identity-manager use ``"admin-panel"``).
+                PyJWT rejects tokens with an ``aud`` claim if no audience is provided here.
         """
         self._secret = jwt_secret
         self._algorithm = jwt_algorithm
         self._jwks_url = jwks_url
         self._identity_url = identity_url
+        self._audience = audience
 
         # JWKS cache: {kid: public_key_object}
         self._jwks_cache: dict[str, Any] = {}
@@ -130,13 +140,32 @@ class TokenValidator:
         if public_key is None:
             return None
 
+        # Peek at unverified claims to check if token has an aud claim.
+        # PyJWT requires audience= when token has aud, and rejects it when token
+        # lacks aud but audience= is passed. We must match accordingly.
         try:
-            payload = jwt.decode(
+            unverified = jwt.decode(
                 token,
-                public_key,
+                options={"verify_signature": False},
                 algorithms=_ALLOWED_ALGORITHMS,
-                options={"require": ["sub", "exp", "iat"]},
             )
+        except jwt.InvalidTokenError:
+            return None
+
+        decode_kwargs: dict[str, Any] = {
+            "algorithms": _ALLOWED_ALGORITHMS,
+            "options": {"require": ["sub", "exp", "iat"]},
+        }
+        token_has_aud = "aud" in unverified
+        if token_has_aud and self._audience:
+            decode_kwargs["audience"] = self._audience
+        elif token_has_aud and not self._audience:
+            # Token has aud but validator has no expected audience configured —
+            # PyJWT will raise InvalidAudienceError. Return None (validation fails).
+            return None
+
+        try:
+            payload = jwt.decode(token, public_key, **decode_kwargs)
             return self._build_payload(payload)
         except jwt.ExpiredSignatureError:
             return None

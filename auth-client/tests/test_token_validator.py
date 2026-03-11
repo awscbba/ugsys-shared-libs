@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import jwt
-import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
@@ -53,8 +52,8 @@ def _base_payload(**overrides: object) -> dict:
         "roles": ["member"],
         "isAdmin": False,
         "type": "access",
-        "iat": datetime.now(tz=timezone.utc),
-        "exp": datetime.now(tz=timezone.utc) + timedelta(hours=1),
+        "iat": datetime.now(tz=UTC),
+        "exp": datetime.now(tz=UTC) + timedelta(hours=1),
         **overrides,
     }
 
@@ -84,7 +83,7 @@ class TestHS256LocalValidation:
         assert result.email == "user@example.com"
 
     def test_expired_token_returns_none(self) -> None:
-        token = _hs_token(_base_payload(exp=datetime.now(tz=timezone.utc) - timedelta(hours=1)))
+        token = _hs_token(_base_payload(exp=datetime.now(tz=UTC) - timedelta(hours=1)))
         assert self.validator.validate_local(token) is None
 
     def test_invalid_signature_returns_none(self) -> None:
@@ -136,13 +135,10 @@ class TestAlgorithmRestriction:
 
         raw = _base_payload()
         serializable = {
-            k: int(v.timestamp()) if isinstance(v, datetime) else v
-            for k, v in raw.items()
+            k: int(v.timestamp()) if isinstance(v, datetime) else v for k, v in raw.items()
         }
         h = base64.urlsafe_b64encode(b'{"alg":"none","typ":"JWT"}').rstrip(b"=").decode()
-        p = base64.urlsafe_b64encode(
-            json.dumps(serializable).encode()
-        ).rstrip(b"=").decode()
+        p = base64.urlsafe_b64encode(json.dumps(serializable).encode()).rstrip(b"=").decode()
         none_token = f"{h}.{p}."
         result = self.validator.validate(none_token)
         assert result is None
@@ -175,9 +171,9 @@ class TestRS256JWKSValidation:
         # Pre-populate cache so no HTTP call needed
         from jwt.algorithms import RSAAlgorithm
 
-        v._jwks_cache = {_KID: RSAAlgorithm.from_jwk(
-            json.loads(RSAAlgorithm.to_jwk(_RSA_PUBLIC_KEY))
-        )}
+        v._jwks_cache = {
+            _KID: RSAAlgorithm.from_jwk(json.loads(RSAAlgorithm.to_jwk(_RSA_PUBLIC_KEY)))
+        }
         v._jwks_cache_ts = time.monotonic()
         return v
 
@@ -190,9 +186,7 @@ class TestRS256JWKSValidation:
 
     def test_expired_rs256_token_returns_none(self) -> None:
         validator = self._make_validator()
-        token = _rs256_token(
-            _base_payload(exp=datetime.now(tz=timezone.utc) - timedelta(hours=1))
-        )
+        token = _rs256_token(_base_payload(exp=datetime.now(tz=UTC) - timedelta(hours=1)))
         assert validator.validate(token) is None
 
     def test_wrong_key_returns_none(self) -> None:
@@ -261,8 +255,85 @@ class TestRS256JWKSValidation:
         # Token without 'iat'
         payload = {
             "sub": "user-123",
-            "exp": datetime.now(tz=timezone.utc) + timedelta(hours=1),
+            "exp": datetime.now(tz=UTC) + timedelta(hours=1),
             # iat intentionally missing
         }
         token = _rs256_token(payload)
         assert validator.validate(token) is None
+
+
+# ── Audience validation ───────────────────────────────────────────────────────
+
+
+class TestAudienceValidation:
+    """Audience claim handling — critical for ugsys-identity-manager tokens.
+
+    IM access tokens include ``aud: "admin-panel"``. PyJWT raises
+    ``InvalidAudienceError`` (subclass of ``InvalidTokenError``) when a token
+    has an ``aud`` claim but no ``audience`` is passed to ``decode()``.
+    This was the root cause of the AUTHENTICATION_REQUIRED 401 in projects-registry.
+    """
+
+    def _make_validator(self, audience: str | None = None) -> TokenValidator:
+        v = TokenValidator(
+            jwt_algorithm="RS256",
+            jwks_url="https://auth.apps.cloud.org.bo/.well-known/jwks.json",
+            audience=audience,
+        )
+        from jwt.algorithms import RSAAlgorithm
+
+        v._jwks_cache = {
+            _KID: RSAAlgorithm.from_jwk(json.loads(RSAAlgorithm.to_jwk(_RSA_PUBLIC_KEY)))
+        }
+        v._jwks_cache_ts = time.monotonic()
+        return v
+
+    def test_token_with_aud_accepted_when_audience_matches(self) -> None:
+        """Token with aud claim is accepted when validator audience matches."""
+        validator = self._make_validator(audience="admin-panel")
+        token = _rs256_token(_base_payload(aud="admin-panel"))
+        result = validator.validate(token)
+        assert result is not None
+        assert result.sub == "user-123"
+
+    def test_token_with_aud_rejected_when_no_audience_configured(self) -> None:
+        """Token with aud claim returns None when validator has no audience set.
+
+        This is the exact bug that caused AUTHENTICATION_REQUIRED 401 in
+        projects-registry: TokenValidator constructed without audience=,
+        but IM tokens always include aud: "admin-panel".
+        PyJWT raises InvalidAudienceError -> caught -> returns None.
+        """
+        validator = self._make_validator(audience=None)
+        token = _rs256_token(_base_payload(aud="admin-panel"))
+        # Must return None — PyJWT rejects token with aud when no audience provided
+        assert validator.validate(token) is None
+
+    def test_token_with_aud_rejected_when_audience_mismatch(self) -> None:
+        """Token with wrong aud value is rejected even if audience is configured."""
+        validator = self._make_validator(audience="admin-panel")
+        token = _rs256_token(_base_payload(aud="wrong-service"))
+        assert validator.validate(token) is None
+
+    def test_token_without_aud_accepted_when_audience_not_configured(self) -> None:
+        """Tokens without aud claim work fine when no audience is configured."""
+        validator = self._make_validator(audience=None)
+        payload = _base_payload()
+        payload.pop("aud", None)
+        token = _rs256_token(payload)
+        result = validator.validate(token)
+        assert result is not None
+        assert result.sub == "user-123"
+
+    def test_token_without_aud_accepted_when_audience_configured(self) -> None:
+        """Tokens without aud claim are accepted even when audience is configured.
+
+        PyJWT only enforces aud when the token actually contains the claim.
+        Services that issue tokens without aud (e.g. refresh tokens) still work.
+        """
+        validator = self._make_validator(audience="admin-panel")
+        payload = _base_payload()
+        payload.pop("aud", None)
+        token = _rs256_token(payload)
+        result = validator.validate(token)
+        assert result is not None
