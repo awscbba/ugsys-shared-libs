@@ -1,6 +1,7 @@
 name: Publish — Build & Release
 
 # Triggered by tags like: auth-client/v0.2.0  logging-lib/v1.0.0
+# Or manually via workflow_dispatch with a tag input.
 # Consumers install via git source (no PyPI registry needed):
 #   uv add "ugsys-auth-client @ git+https://github.com/awscbba/ugsys-shared-libs@auth-client/v0.1.0#subdirectory=auth-client"
 on:
@@ -10,6 +11,12 @@ on:
       - "logging-lib/v*"
       - "event-lib/v*"
       - "testing-lib/v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. auth-client/v0.2.2)"
+        required: true
+        type: string
 
 env:
   PYTHON_VERSION: "3.13"
@@ -21,22 +28,58 @@ jobs:
     outputs:
       package: ${{ steps.parse.outputs.package }}
       version: ${{ steps.parse.outputs.version }}
+      tag: ${{ steps.parse.outputs.tag }}
     steps:
       - name: Parse tag
         id: parse
         run: |
-          TAG="${{ github.ref_name }}"
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
           PKG="${TAG%%/v*}"
           VER="${TAG#*/v}"
-          echo "package=$PKG" >> $GITHUB_OUTPUT
-          echo "version=$VER"  >> $GITHUB_OUTPUT
+          echo "tag=$TAG"       >> $GITHUB_OUTPUT
+          echo "package=$PKG"   >> $GITHUB_OUTPUT
+          echo "version=$VER"   >> $GITHUB_OUTPUT
+
+      - name: Validate tag format
+        run: |
+          TAG="${{ steps.parse.outputs.tag }}"
+          if [[ ! "$TAG" =~ ^(auth-client|logging-lib|event-lib|testing-lib)/v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "::error::Invalid tag format: $TAG (expected: <package>/v<semver>)"
+            exit 1
+          fi
+
+  create-tag:
+    name: Create Tag (dispatch only)
+    runs-on: ubuntu-latest
+    needs: [resolve]
+    if: github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create and push tag
+        run: |
+          TAG="${{ needs.resolve.outputs.tag }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists — skipping creation"
+          else
+            git tag "$TAG"
+            git push origin "$TAG"
+            echo "Created and pushed tag: $TAG"
+          fi
 
   ci-gate:
     name: CI Gate (${{ needs.resolve.outputs.package }})
     runs-on: ubuntu-latest
-    needs: [resolve]
+    needs: [resolve, create-tag]
+    if: always() && needs.resolve.result == 'success' && (needs.create-tag.result == 'success' || needs.create-tag.result == 'skipped')
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
       - uses: astral-sh/setup-uv@v4
       - run: uv python install ${{ env.PYTHON_VERSION }}
       - name: Resolve source directory
@@ -62,6 +105,8 @@ jobs:
     needs: [resolve, ci-gate]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
       - uses: astral-sh/setup-uv@v4
       - run: uv python install ${{ env.PYTHON_VERSION }}
       - name: Build wheel + sdist
@@ -118,7 +163,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ needs.resolve.outputs.tag }}
           name: "${{ needs.resolve.outputs.package }} v${{ needs.resolve.outputs.version }}"
           body: ${{ steps.notes.outputs.notes }}
           files: dist/*
